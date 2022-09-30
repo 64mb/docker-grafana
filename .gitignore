@@ -1,0 +1,16 @@
+/.vscode
+/.idea
+/.directory
+
+.env
+.env.temp
+
+.docker/*
+
+# deploy last commit data
+*.deploy
+
+.key
+
+.prometheus.hosts
+.prometheus.targets

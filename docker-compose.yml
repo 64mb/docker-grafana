@@ -1,0 +1,160 @@
+version: '3.4'
+services:
+  traefik:
+    image: traefik:2.5.2
+    container_name: traefik
+    restart: always
+    command:
+      - "--api=true"
+      - "--providers.docker=true"
+      - "--providers.docker.network=${COMPOSE_PROJECT_NAME}_web"
+      - "--providers.docker.watch=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--certificatesresolvers.traefik.acme.email=${ACME_EMAIL:?lost ACME_EMAIL variable}"
+      - "--certificatesresolvers.traefik.acme.storage=/lets_encrypt/acme.json"
+      - "--certificatesresolvers.traefik.acme.httpchallenge.entrypoint=web"
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.api.rule=Host(`traefik.${DOMAIN_GRAFANA:?lost DOMAIN_GRAFANA variable}`)
+      - traefik.http.routers.api.service=api@internal
+      - traefik.http.routers.api.middlewares=ip-white,auth
+      - traefik.http.middlewares.auth.basicauth.users=${HT_PASSWD:?lost HT_PASSWD variable}
+      - traefik.http.middlewares.ip-white.ipwhitelist.sourcerange=${IP_FILTER:-0.0.0.0/0}
+      - traefik.http.routers.api.tls.certresolver=traefik
+      - traefik.http.routers.api.tls=true
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - lets_encrypt:/lets_encrypt
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    networks:
+      - web
+
+  grafana:
+    image: grafana/grafana:8.4.4
+    container_name: grafana
+    restart: always
+    labels:
+      - traefik.enable=true
+      - traefik.http.middlewares.ip-white.ipwhitelist.sourcerange=${IP_FILTER:-0.0.0.0/0}
+      - traefik.http.routers.grafana.middlewares=ip-white
+      - traefik.http.services.grafana.loadbalancer.server.port=3000
+      - traefik.http.routers.grafana.rule=Host(`${DOMAIN_GRAFANA:?lost DOMAIN_GRAFANA variable}`)
+      - traefik.http.routers.grafana.tls.certresolver=traefik
+      - traefik.http.routers.grafana.tls=true
+    environment:
+      GF_SERVER_DOMAIN: ${DOMAIN_GRAFANA:?lost DOMAIN_GRAFANA variable}
+      GF_SERVER_ROOT_URL: https://${DOMAIN_GRAFANA:?lost DOMAIN_GRAFANA variable}
+      GF_RENDERING_SERVER_URL: http://grafana_image_renderer:8081/render
+      GF_RENDERING_CALLBACK_URL: http://grafana:3000/
+      GF_SMTP_ENABLED: 'true'
+      GF_SMTP_HOST: ${GRAFANA_SMTP_HOST:?lost GRAFANA_SMTP_HOST variable}
+      GF_SMTP_USER: ${GRAFANA_SMTP_USER:?lost GRAFANA_SMTP_USER variable}
+      GF_SMTP_PASSWORD: ${GRAFANA_SMTP_PASSWORD:?lost GRAFANA_SMTP_PASSWORD variable}
+      GF_SMTP_FROM_ADDRESS: ${GRAFANA_SMTP_USER:?lost GRAFANA_SMTP_USER variable}
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - local
+      - web
+
+  grafana_image_renderer:
+    image: grafana/grafana-image-renderer:3.3.0
+    container_name: grafana_image_renderer
+    restart: always
+    networks:
+      - local
+
+  loki:
+    build:
+      context: ./loki
+      dockerfile: ./dockerfile
+    image: loki:${VERSION:?lost VERSION variable}
+    container_name: loki
+    restart: always
+    command: -config.file=/etc/loki/config.yml
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.loki.loadbalancer.server.port=3100
+      - traefik.http.routers.loki.rule=Host(`${DOMAIN_LOKI:?lost DOMAIN_LOKI variable}`)
+      - traefik.http.routers.loki.middlewares=auth-loki
+      - traefik.http.middlewares.auth-loki.basicauth.users=${HT_PASSWD_LOKI:?lost HT_PASSWD_LOKI variable}
+      - traefik.http.routers.loki.tls.certresolver=traefik
+      - traefik.http.routers.loki.tls=true
+    volumes:
+      - ${LOKI_DB_DATA:?lost LOKI_DB_DATA variable}:/loki/
+    networks:
+      - web
+
+  prometheus:
+    build:
+      context: ./prometheus
+      dockerfile: ./dockerfile
+      args:
+        - PROMETHEUS_HOSTS=${PROMETHEUS_HOSTS:?lost PROMETHEUS_HOSTS variable}
+        - PROMETHEUS_TARGETS=${PROMETHEUS_TARGETS:?lost PROMETHEUS_TARGETS variable}
+        - NODE_EXPORTER_USER=${NODE_EXPORTER_USER:?lost NODE_EXPORTER_USER variable}
+        - NODE_EXPORTER_PASSWORD=${NODE_EXPORTER_PASSWORD:?lost NODE_EXPORTER_PASSWORD variable}
+    image: prometheus:${VERSION:?lost VERSION variable}
+    container_name: prometheus
+    restart: always
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - cat /etc/prometheus/targets.yml && prometheus --config.file=/etc/prometheus/config.yml --storage.tsdb.path=/prometheus --storage.tsdb.retention.time=90d --log.level=info
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.prometheus.loadbalancer.server.port=9090
+      - traefik.http.routers.prometheus.rule=Host(`${DOMAIN_PROMETHEUS:?lost DOMAIN_PROMETHEUS variable}`)
+      - traefik.http.routers.prometheus.middlewares=auth-prometheus
+      - traefik.http.middlewares.auth-prometheus.basicauth.users=${HT_PASSWD_PROMETHEUS:?lost HT_PASSWD_PROMETHEUS variable}
+      - traefik.http.routers.prometheus.tls.certresolver=traefik
+      - traefik.http.routers.prometheus.tls=true
+    volumes:
+      - ${PROMETHEUS_DB_DATA:?lost PROMETHEUS_DB_DATA variable}:/prometheus/
+    networks:
+      - local
+      - web
+
+  prometheus_blackbox:
+    build:
+      context: ./blackbox
+      dockerfile: ./dockerfile
+    image: prometheus-exporter-blackbox:${VERSION:?lost VERSION variable}
+    container_name: prometheus_blackbox
+    restart: always
+    environment:
+      NODE_EXPORTER_USER: ${NODE_EXPORTER_USER:?lost NODE_EXPORTER_USER variable}
+      NODE_EXPORTER_PASSWORD: ${NODE_EXPORTER_PASSWORD:?lost NODE_EXPORTER_PASSWORD variable}
+      PROMETHEUS_HOSTS: ${PROMETHEUS_HOSTS:?lost PROMETHEUS_HOSTS variable}
+    command:
+      - --config.file=/etc/blackbox/config.yml
+    dns: 77.88.8.8
+    networks:
+      - local
+
+  prometheus_universal:
+    build:
+      context: ./universal
+      dockerfile: ./dockerfile
+    image: prometheus-exporter-universal:${VERSION:?lost VERSION variable}
+    container_name: prometheus_universal
+    restart: always
+    dns: 77.88.8.8
+    networks:
+      - local
+
+networks:
+  web:
+    driver: bridge
+  local:
+    driver: bridge
+
+volumes:
+  grafana_data:
+  lets_encrypt:

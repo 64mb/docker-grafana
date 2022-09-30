@@ -1,0 +1,20 @@
+FROM prom/prometheus:v2.28.1
+
+ARG PROMETHEUS_HOSTS
+ARG PROMETHEUS_TARGETS
+ARG NODE_EXPORTER_USER
+ARG NODE_EXPORTER_PASSWORD
+
+ENV PROMETHEUS_HOSTS=$PROMETHEUS_HOSTS
+ENV PROMETHEUS_TARGETS=$PROMETHEUS_TARGETS
+ENV NODE_EXPORTER_USER=$NODE_EXPORTER_USER
+ENV NODE_EXPORTER_PASSWORD=$NODE_EXPORTER_PASSWORD
+
+COPY config.yml /etc/prometheus/config.yml
+
+COPY targets.yml /etc/prometheus/targets.yml
+
+RUN sed -i s/'{{NODE_EXPORTER_USER}}'/${NODE_EXPORTER_USER}/g /etc/prometheus/config.yml
+RUN sed -i s/'{{NODE_EXPORTER_PASSWORD}}'/${NODE_EXPORTER_PASSWORD}/g /etc/prometheus/config.yml
+RUN export HOSTS=$(printf "$PROMETHEUS_HOSTS" | sed 's|$|,|' | tr -d '\n' | sed 's|,$||') && sed -i 's|{{PROMETHEUS_HOSTS}}|['$HOSTS']|g' /etc/prometheus/config.yml
+RUN export HOSTS=$(printf "$PROMETHEUS_TARGETS" | sed 's|$|,|' | tr -d '\n' | sed 's|,$||') && sed -i 's|{{PROMETHEUS_TARGETS}}|['$HOSTS']|g' /etc/prometheus/targets.yml

@@ -1,0 +1,53 @@
+scrape_configs:
+  - job_name: node
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    basic_auth:
+      username: {{NODE_EXPORTER_USER}}
+      password: {{NODE_EXPORTER_PASSWORD}}
+    # scheme: https
+    # tls_config:
+      # ca_file: /etc/prometheus/keys/ca.pem
+      # cert_file: /etc/prometheus/keys/cert.pem
+      # key_file: /etc/prometheus/keys/key.pem
+      # insecure_skip_verify: true
+    static_configs:
+    - targets: {{PROMETHEUS_HOSTS}}
+    relabel_configs:
+    - source_labels: ['__address__']
+      regex: (.*):.*
+      target_label: instance
+      replacement: ${1}
+
+  - job_name: 'blackbox'
+    scrape_interval: 60s
+    scrape_timeout: 30s
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    file_sd_configs:
+      - files: ['/etc/prometheus/targets.yml']
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: (.*)(:80)?
+        target_label: __param_target
+      - source_labels: [__param_target]
+        regex: (.*)
+        target_label: instance
+        replacement: ${1}
+      - source_labels: [__param_target]
+        regex: .*://([^/]*)/?.*
+        target_label: host
+        replacement: ${1}
+      - source_labels: []
+        regex: .*
+        target_label: __address__
+        replacement: prometheus_blackbox:9115
+
+  - job_name: 'universal'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    metrics_path: /
+    static_configs:
+    - targets:
+      - prometheus_universal:6464
